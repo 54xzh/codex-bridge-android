@@ -1,5 +1,5 @@
 // 本文件提供"聊天界面"：支持加载历史消息、连接 WS 接收增量输出，并发送 chat.send 指令。
-// 使用 M3 Expressive 组件和消息气泡设计
+// 使用 M3 Expressive 组件（无头像；助手消息为纯文本样式）
 package com.xzh.bridge.ui.screens.chat
 
 import androidx.compose.animation.AnimatedVisibility
@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -33,9 +32,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.HourglassEmpty
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,7 +61,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,10 +69,6 @@ import com.xzh.bridge.bridge.BridgeApi
 import com.xzh.bridge.bridge.BridgeEnvelope
 import com.xzh.bridge.bridge.SessionMessage
 import com.xzh.bridge.bridge.TurnPlanStep
-import com.xzh.bridge.ui.theme.AssistantBubbleDark
-import com.xzh.bridge.ui.theme.AssistantBubbleLight
-import com.xzh.bridge.ui.theme.UserBubbleDark
-import com.xzh.bridge.ui.theme.UserBubbleLight
 import kotlinx.coroutines.launch
 import okhttp3.WebSocket
 import java.util.UUID
@@ -427,68 +419,33 @@ private fun MessageBubble(message: ChatUiMessage) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        if (!isUser) {
-            // 助手头像
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
+        if (isUser) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(
+                    topStart = 16.dp,
+                    topEnd = 16.dp,
+                    bottomStart = 16.dp,
+                    bottomEnd = 4.dp
+                ),
+                modifier = Modifier.widthIn(max = 300.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.SmartToy,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(12.dp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-        }
-
-        Surface(
-            color = if (isUser) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isUser) 16.dp else 4.dp,
-                bottomEnd = if (isUser) 4.dp else 16.dp
-            ),
-            modifier = Modifier.widthIn(max = 300.dp)
-        ) {
+        } else {
             Text(
                 text = message.text,
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(12.dp),
-                color = if (isUser) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                }
-            )
-        }
-
-        if (isUser) {
-            Spacer(modifier = Modifier.width(8.dp))
-            // 用户头像
-            Box(
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.secondaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
+                    .widthIn(max = 340.dp)
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
         }
     }
 }

@@ -1,10 +1,10 @@
-// 本文件提供"连接设备/配对"界面：输入后端地址与配对码，轮询获取 deviceToken 并回传上层保存。
+// 本文件提供"连接设备/配对"界面：通过扫码或粘贴二维码内容完成配对，轮询获取 deviceToken 并回传上层保存。
 // 使用 M3 Expressive 组件和设计规范
 package com.xzh.bridge.ui.screens.connect
 
-import android.net.Uri
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.layout.Arrangement
@@ -21,14 +21,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,9 +55,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.xzh.bridge.bridge.BridgeApi
 import com.xzh.bridge.bridge.PairingPollResponse
 import com.xzh.bridge.storage.ConnectionConfig
@@ -72,16 +77,82 @@ fun ConnectDeviceScreen(
     onPaired: (ConnectionConfig) -> Unit,
     onCancel: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    var baseUrl by remember { mutableStateOf(initialBaseUrl) }
+    var baseUrl by remember { mutableStateOf("") }
     var pairingCode by remember { mutableStateOf("") }
-    var deviceName by remember { mutableStateOf(android.os.Build.MODEL ?: "Android") }
+    val deviceName = remember { android.os.Build.MODEL ?: "Android" }
     var qrText by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("请输入后端地址与配对码") }
+    var status by remember { mutableStateOf("请扫描或粘贴二维码内容") }
     var isBusy by remember { mutableStateOf(false) }
     var statusType by remember { mutableStateOf(StatusType.INFO) }
+    var showScanner by remember { mutableStateOf(false) }
+
+    fun applyQrText(input: String) {
+        val trimmed = input.trim()
+        val parsed = parsePairingQrText(trimmed)
+        if (parsed == null) {
+            baseUrl = ""
+            pairingCode = ""
+            if (trimmed.isBlank()) {
+                status = "请扫描或粘贴二维码内容"
+                statusType = StatusType.INFO
+                return
+            }
+            if (!trimmed.startsWith("codex-bridge://", ignoreCase = true)) {
+                status = "请粘贴 codex-bridge://pair?... 链接"
+                statusType = StatusType.INFO
+                return
+            }
+
+            status = "二维码内容无法解析"
+            statusType = StatusType.ERROR
+            return
+        }
+        baseUrl = parsed.baseUrl
+        pairingCode = parsed.pairingCode
+        status = "已解析二维码内容"
+        statusType = StatusType.SUCCESS
+    }
+
+    val requestCameraPermission = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            showScanner = true
+        } else {
+            status = "需要相机权限才能扫码"
+            statusType = StatusType.ERROR
+        }
+    }
+
+    fun openScanner() {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            showScanner = true
+        } else {
+            requestCameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    if (showScanner) {
+        Dialog(
+            onDismissRequest = { showScanner = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            QrScannerScreen(
+                onScanned = { value ->
+                    showScanner = false
+                    qrText = value
+                    applyQrText(value)
+                },
+                onClose = { showScanner = false }
+            )
+        }
+    }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -119,73 +190,33 @@ fun ConnectDeviceScreen(
             // 说明卡片
             InfoCard()
 
-            // 二维码输入
+            // 二维码输入（唯一输入）
             InputField(
                 value = qrText,
                 onValueChange = { input ->
                     qrText = input
-                    if (input.startsWith("codex-bridge://pair", ignoreCase = true)) {
-                        try {
-                            val uri = Uri.parse(input.trim())
-                            val parsedBaseUrl = uri.getQueryParameter("baseUrl")
-                            val parsedCode = uri.getQueryParameter("pairingCode")
-                            if (!parsedBaseUrl.isNullOrBlank()) {
-                                baseUrl = parsedBaseUrl
-                            }
-                            if (!parsedCode.isNullOrBlank()) {
-                                pairingCode = parsedCode
-                            }
-                            status = "已解析二维码内容"
-                            statusType = StatusType.SUCCESS
-                        } catch (_: Exception) {
-                            status = "二维码内容解析失败"
-                            statusType = StatusType.ERROR
-                        }
-                    }
+                    applyQrText(input)
                 },
                 label = "二维码内容",
-                placeholder = "粘贴 codex-bridge://pair?... 链接",
+                placeholder = "扫描或粘贴 codex-bridge://pair?... 链接",
                 leadingIcon = Icons.Default.QrCode2,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
-            )
-
-            // 后端地址
-            InputField(
-                value = baseUrl,
-                onValueChange = { baseUrl = it },
-                label = "后端地址",
-                placeholder = "例如 192.168.1.10:12345",
-                leadingIcon = Icons.Default.Cloud,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
-                    imeAction = ImeAction.Next
-                )
-            )
-
-            // 配对码
-            InputField(
-                value = pairingCode,
-                onValueChange = { pairingCode = it },
-                label = "配对码",
-                placeholder = "6位配对码",
-                leadingIcon = Icons.Default.Key,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
-                    imeAction = ImeAction.Next
-                )
-            )
-
-            // 设备名称
-            InputField(
-                value = deviceName,
-                onValueChange = { deviceName = it },
-                label = "设备名称",
-                placeholder = "显示在电脑端的名称",
-                leadingIcon = Icons.Default.PhoneAndroid,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+                    imeAction = ImeAction.Done
+                ),
+                trailingIcon = {
+                    IconButton(onClick = ::openScanner) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = "扫码"
+                        )
+                    }
+                }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
+
+            ParsedInfoCard(baseUrl = baseUrl, pairingCode = pairingCode)
 
             // 配对按钮
             FilledTonalButton(
@@ -298,7 +329,7 @@ private fun InfoCard() {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "需要在 Windows 端确认后才能完成配对；完成后会保存 deviceToken。可通过扫描二维码或手动输入信息进行配对。",
+                    text = "需要在 Windows 端确认后才能完成配对；完成后会保存 deviceToken。请扫描二维码或粘贴二维码内容进行配对。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -314,7 +345,8 @@ private fun InputField(
     label: String,
     placeholder: String,
     leadingIcon: ImageVector,
-    keyboardOptions: KeyboardOptions = KeyboardOptions.Default
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    trailingIcon: @Composable (() -> Unit)? = null
 ) {
     OutlinedTextField(
         value = value,
@@ -328,6 +360,7 @@ private fun InputField(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         },
+        trailingIcon = trailingIcon,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = OutlinedTextFieldDefaults.colors(
@@ -339,6 +372,68 @@ private fun InputField(
         keyboardOptions = keyboardOptions,
         singleLine = true
     )
+}
+
+@Composable
+private fun ParsedInfoCard(
+    baseUrl: String,
+    pairingCode: String
+) {
+    val hasParsed = baseUrl.isNotBlank() && pairingCode.isNotBlank()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        if (!hasParsed) {
+            Text(
+                text = "等待解析二维码内容…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(16.dp)
+            )
+            return@Card
+        }
+
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "已解析",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "后端：$baseUrl",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "配对码：$pairingCode",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
 }
 
 @Composable

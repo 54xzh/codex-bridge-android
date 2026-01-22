@@ -3,12 +3,20 @@
 package com.xzh.bridge.ui
 
 import android.net.Uri
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -36,6 +44,7 @@ private object BridgeRoutes {
     }
 }
 
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun BridgeApp() {
     val context = LocalContext.current
@@ -53,86 +62,117 @@ fun BridgeApp() {
         BridgeApi(current.baseUrl) { current.deviceToken }
     }
 
-    NavHost(navController = navController, startDestination = startDestination) {
-        composable(BridgeRoutes.Connect) {
-            ConnectDeviceScreen(
-                initialBaseUrl = config?.baseUrl.orEmpty(),
-                onPaired = { newConfig ->
-                    prefs.save(newConfig)
-                    config = newConfig
-                    navController.navigate(BridgeRoutes.Sessions) {
-                        popUpTo(BridgeRoutes.Connect) { inclusive = true }
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        NavHost(
+            navController = navController,
+            startDestination = startDestination,
+            enterTransition = {
+                slideInHorizontally(
+                    animationSpec = tween(220),
+                    initialOffsetX = { it }
+                )
+            },
+            exitTransition = {
+                slideOutHorizontally(
+                    animationSpec = tween(220),
+                    targetOffsetX = { -it }
+                )
+            },
+            popEnterTransition = {
+                slideInHorizontally(
+                    animationSpec = tween(220),
+                    initialOffsetX = { -it }
+                )
+            },
+            popExitTransition = {
+                slideOutHorizontally(
+                    animationSpec = tween(220),
+                    targetOffsetX = { it }
+                )
+            }
+        ) {
+            composable(BridgeRoutes.Connect) {
+                ConnectDeviceScreen(
+                    initialBaseUrl = config?.baseUrl.orEmpty(),
+                    onPaired = { newConfig ->
+                        prefs.save(newConfig)
+                        config = newConfig
+                        navController.navigate(BridgeRoutes.Sessions) {
+                            popUpTo(BridgeRoutes.Connect) { inclusive = true }
+                        }
+                    },
+                    onCancel = if (config != null) {
+                        { navController.popBackStack() }
+                    } else {
+                        null
                     }
-                },
-                onCancel = if (config != null) {
-                    { navController.popBackStack() }
-                } else {
-                    null
-                }
-            )
-        }
-
-        composable(BridgeRoutes.Sessions) {
-            val currentApi = api
-            val currentConfig = config
-            if (currentApi == null || currentConfig == null) {
-                LaunchedEffect(Unit) {
-                    navController.navigate(BridgeRoutes.Connect) {
-                        popUpTo(BridgeRoutes.Sessions) { inclusive = true }
-                    }
-                }
-                return@composable
+                )
             }
 
-            SessionListScreen(
-                api = currentApi,
-                config = currentConfig,
-                onOpenSession = { sessionId ->
-                    navController.navigate(BridgeRoutes.chatRoute(sessionId))
-                },
-                onNewChat = {
-                    navController.navigate(BridgeRoutes.chatRoute(null))
-                },
-                onOpenConnect = {
-                    navController.navigate(BridgeRoutes.Connect)
-                },
-                onReset = {
-                    prefs.clear()
-                    config = null
-                    navController.navigate(BridgeRoutes.Connect) {
-                        popUpTo(BridgeRoutes.Sessions) { inclusive = true }
+            composable(BridgeRoutes.Sessions) {
+                val currentApi = api
+                val currentConfig = config
+                if (currentApi == null || currentConfig == null) {
+                    LaunchedEffect(Unit) {
+                        navController.navigate(BridgeRoutes.Connect) {
+                            popUpTo(BridgeRoutes.Sessions) { inclusive = true }
+                        }
                     }
+                    return@composable
                 }
-            )
-        }
 
-        composable(
-            route = BridgeRoutes.ChatWithArgs,
-            arguments = listOf(
-                navArgument(BridgeRoutes.ArgSessionId) {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                }
-            )
-        ) { entry ->
-            val currentApi = api
-            if (currentApi == null) {
-                LaunchedEffect(Unit) {
-                    navController.navigate(BridgeRoutes.Connect) {
-                        popUpTo(BridgeRoutes.ChatWithArgs) { inclusive = true }
+                SessionListScreen(
+                    api = currentApi,
+                    config = currentConfig,
+                    onOpenSession = { sessionId ->
+                        navController.navigate(BridgeRoutes.chatRoute(sessionId))
+                    },
+                    onNewChat = {
+                        navController.navigate(BridgeRoutes.chatRoute(null))
+                    },
+                    onOpenConnect = {
+                        navController.navigate(BridgeRoutes.Connect)
+                    },
+                    onReset = {
+                        prefs.clear()
+                        config = null
+                        navController.navigate(BridgeRoutes.Connect) {
+                            popUpTo(BridgeRoutes.Sessions) { inclusive = true }
+                        }
                     }
-                }
-                return@composable
+                )
             }
 
-            val sessionId = entry.arguments?.getString(BridgeRoutes.ArgSessionId)
-            ChatScreen(
-                api = currentApi,
-                initialSessionId = sessionId,
-                onBack = { navController.popBackStack() }
-            )
+            composable(
+                route = BridgeRoutes.ChatWithArgs,
+                arguments = listOf(
+                    navArgument(BridgeRoutes.ArgSessionId) {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
+            ) { entry ->
+                val currentApi = api
+                if (currentApi == null) {
+                    LaunchedEffect(Unit) {
+                        navController.navigate(BridgeRoutes.Connect) {
+                            popUpTo(BridgeRoutes.ChatWithArgs) { inclusive = true }
+                        }
+                    }
+                    return@composable
+                }
+
+                val sessionId = entry.arguments?.getString(BridgeRoutes.ArgSessionId)
+                ChatScreen(
+                    api = currentApi,
+                    initialSessionId = sessionId,
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
     }
 }
-
