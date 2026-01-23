@@ -21,6 +21,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Bridge"
+rootProject.name = "codex-relayouter"
 include(":app")
  

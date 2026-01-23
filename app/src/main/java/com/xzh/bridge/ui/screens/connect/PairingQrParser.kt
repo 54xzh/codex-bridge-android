@@ -18,7 +18,7 @@ internal fun parsePairingQrText(text: String): PairingQrPayload? {
         return null
     }
 
-    val schemeOk = uri.scheme?.equals("codex-bridge", ignoreCase = true) == true
+    val schemeOk = uri.scheme?.equals("codex-relayouter", ignoreCase = true) == true
     val hostOk = uri.host?.equals("pair", ignoreCase = true) == true
     if (!schemeOk || !hostOk) return null
 

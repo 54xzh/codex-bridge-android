@@ -101,8 +101,8 @@ fun ConnectDeviceScreen(
                 statusType = StatusType.INFO
                 return
             }
-            if (!trimmed.startsWith("codex-bridge://", ignoreCase = true)) {
-                status = "请粘贴 codex-bridge://pair?... 链接"
+            if (!trimmed.startsWith("codex-relayouter://", ignoreCase = true)) {
+                status = "请粘贴 codex-relayouter://pair?... 链接"
                 statusType = StatusType.INFO
                 return
             }
@@ -198,7 +198,7 @@ fun ConnectDeviceScreen(
                     applyQrText(input)
                 },
                 label = "二维码内容",
-                placeholder = "扫描或粘贴 codex-bridge://pair?... 链接",
+                placeholder = "扫描或粘贴 codex-relayouter://pair?... 链接",
                 leadingIcon = Icons.Default.QrCode2,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
