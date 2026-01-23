@@ -1,4 +1,4 @@
-package com.xzh.bridge.ui.screens.connect
+package com.xzh54.relayouter.ui.screens.connect
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

@@ -1,4 +1,4 @@
-package com.xzh.bridge.bridge
+package com.xzh54.relayouter.bridge
 
 import com.google.gson.Gson
 import com.google.gson.JsonArray

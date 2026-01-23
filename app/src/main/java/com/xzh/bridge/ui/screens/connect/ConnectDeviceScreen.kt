@@ -1,6 +1,6 @@
 // 本文件提供"连接设备/配对"界面：通过扫码或粘贴二维码内容完成配对，轮询获取 deviceToken 并回传上层保存。
 // 使用 M3 Expressive 组件和设计规范
-package com.xzh.bridge.ui.screens.connect
+package com.xzh54.relayouter.ui.screens.connect
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -18,13 +18,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -64,9 +64,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import com.xzh.bridge.bridge.BridgeApi
-import com.xzh.bridge.bridge.PairingPollResponse
-import com.xzh.bridge.storage.ConnectionConfig
+import com.xzh54.relayouter.bridge.BridgeApi
+import com.xzh54.relayouter.bridge.PairingPollResponse
+import com.xzh54.relayouter.storage.ConnectionConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -282,7 +282,7 @@ fun ConnectDeviceScreen(
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(4.dp)),
+                        .clip(MaterialTheme.shapes.extraSmall),
                     strokeCap = StrokeCap.Round
                 )
             }
@@ -362,7 +362,7 @@ private fun InputField(
         },
         trailingIcon = trailingIcon,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = MaterialTheme.colorScheme.primary,
             unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
@@ -456,12 +456,30 @@ private fun StatusCard(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
-        Text(
-            text = status,
-            style = MaterialTheme.typography.bodyMedium,
-            color = contentColor,
-            modifier = Modifier.padding(16.dp)
-        )
+        val (icon, iconTint) = when (type) {
+            StatusType.INFO -> Icons.Default.Info to MaterialTheme.colorScheme.primary
+            StatusType.SUCCESS -> Icons.Default.Check to contentColor
+            StatusType.ERROR -> Icons.Default.ErrorOutline to contentColor
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = status,
+                style = MaterialTheme.typography.bodyMedium,
+                color = contentColor
+            )
+        }
     }
 }
 

@@ -1,12 +1,10 @@
 // 本文件提供"聊天界面"：支持加载历史消息、连接 WS 接收增量输出，并发送 chat.send 指令。
 // 使用 M3 Expressive 组件（无头像；助手消息为纯文本样式）
-package com.xzh.bridge.ui.screens.chat
+package com.xzh54.relayouter.ui.screens.chat
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -61,14 +60,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
-import com.xzh.bridge.bridge.BridgeApi
-import com.xzh.bridge.bridge.BridgeEnvelope
-import com.xzh.bridge.bridge.SessionMessage
-import com.xzh.bridge.bridge.TurnPlanStep
+import com.xzh54.relayouter.bridge.BridgeApi
+import com.xzh54.relayouter.bridge.BridgeEnvelope
+import com.xzh54.relayouter.bridge.SessionMessage
+import com.xzh54.relayouter.bridge.TurnPlanStep
 import kotlinx.coroutines.launch
 import okhttp3.WebSocket
 import java.util.UUID
@@ -100,6 +105,7 @@ fun ChatScreen(
     var prompt by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var suppressAutoScroll by remember { mutableStateOf(false) }
 
     fun connectWs() {
         webSocket?.close(1000, "reconnect")
@@ -167,27 +173,34 @@ fun ChatScreen(
         val current = sessionId ?: return@LaunchedEffect
         try {
             isLoading = true
+            suppressAutoScroll = true
             error = null
             messages.clear()
             plan = emptyList()
             runToMessageId.clear()
 
             val history = api.getMessages(current)
-            history.forEach { m -> messages.add(m.toUiMessage()) }
+            messages.addAll(history.map { it.toUiMessage() })
 
             val snapshot = api.getPlan(current)
             if (snapshot != null) {
                 plan = snapshot.plan
             }
+
+            if (messages.isNotEmpty()) {
+                listState.scrollToItem(messages.size - 1)
+            }
         } catch (ex: Exception) {
             error = ex.message ?: "加载失败"
         } finally {
             isLoading = false
+            suppressAutoScroll = false
         }
     }
 
     // 自动滚动到底部
     LaunchedEffect(messages.size) {
+        if (suppressAutoScroll) return@LaunchedEffect
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
@@ -294,42 +307,77 @@ private fun ConnectionChip(
     wsStatus: String,
     isConnected: Boolean
 ) {
+    val isConnecting = !isConnected && wsStatus.contains("连接中")
+    val isError = !isConnected && (wsStatus.startsWith("已断开") || wsStatus.contains("失败"))
+
+    val style = when {
+        isConnected -> {
+            ConnectionChipStyle(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                icon = Icons.Default.CloudQueue,
+                label = "已连接"
+            )
+        }
+        isConnecting -> {
+            ConnectionChipStyle(
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                icon = Icons.Default.HourglassEmpty,
+                label = "连接中"
+            )
+        }
+        isError -> {
+            ConnectionChipStyle(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                icon = Icons.Default.CloudOff,
+                label = "已断开"
+            )
+        }
+        else -> {
+            ConnectionChipStyle(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                icon = Icons.Default.CloudOff,
+                label = "未连接"
+            )
+        }
+    }
+
     Surface(
-        color = if (isConnected) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.errorContainer
-        },
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.padding(end = 8.dp)
+        color = style.containerColor,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier
+            .padding(end = 8.dp)
+            .semantics { contentDescription = "连接状态：$wsStatus" }
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = if (isConnected) Icons.Default.CloudQueue else Icons.Default.CloudOff,
-                contentDescription = null,
+                imageVector = style.icon,
+                contentDescription = style.label,
                 modifier = Modifier.size(16.dp),
-                tint = if (isConnected) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onErrorContainer
-                }
+                tint = style.contentColor
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
-                text = if (isConnected) "已连接" else "未连接",
+                text = style.label,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (isConnected) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onErrorContainer
-                }
+                color = style.contentColor
             )
         }
     }
 }
+
+private data class ConnectionChipStyle(
+    val containerColor: Color,
+    val contentColor: Color,
+    val icon: ImageVector,
+    val label: String
+)
 
 @Composable
 private fun ErrorBanner(error: String) {
@@ -414,38 +462,50 @@ private fun PlanStepItem(step: TurnPlanStep) {
 @Composable
 private fun MessageBubble(message: ChatUiMessage) {
     val isUser = message.role == "user"
+    val bubbleShape = if (isUser) {
+        RoundedCornerShape(
+            topStart = 16.dp,
+            topEnd = 16.dp,
+            bottomStart = 16.dp,
+            bottomEnd = 4.dp
+        )
+    } else {
+        RoundedCornerShape(
+            topStart = 16.dp,
+            topEnd = 16.dp,
+            bottomStart = 4.dp,
+            bottomEnd = 16.dp
+        )
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        if (isUser) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(
-                    topStart = 16.dp,
-                    topEnd = 16.dp,
-                    bottomStart = 16.dp,
-                    bottomEnd = 4.dp
-                ),
-                modifier = Modifier.widthIn(max = 300.dp)
-            ) {
+        val containerColor = if (isUser) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        }
+        val contentColor = if (isUser) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        }
+
+        Surface(
+            color = containerColor,
+            shape = bubbleShape,
+            modifier = Modifier.widthIn(max = 340.dp)
+        ) {
+            SelectionContainer {
                 Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(12.dp),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                    color = contentColor
                 )
             }
-        } else {
-            Text(
-                text = message.text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .widthIn(max = 340.dp)
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-            )
         }
     }
 }
@@ -474,13 +534,15 @@ private fun ChatInputBar(
                 onValueChange = onValueChange,
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("输入消息...") },
-                shape = RoundedCornerShape(24.dp),
+                shape = MaterialTheme.shapes.extraLarge,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = MaterialTheme.colorScheme.surface,
                     unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 ),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() }),
                 maxLines = 4
             )
 

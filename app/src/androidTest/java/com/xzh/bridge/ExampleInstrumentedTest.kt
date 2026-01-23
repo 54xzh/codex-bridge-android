@@ -1,4 +1,4 @@
-package com.xzh.bridge
+package com.xzh54.relayouter
 
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -19,6 +19,6 @@ class ExampleInstrumentedTest {
     fun useAppContext() {
         // Context of the app under test.
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("com.xzh.bridge", appContext.packageName)
+        assertEquals("com.xzh54.relayouter", appContext.packageName)
     }
 }

@@ -1,4 +1,4 @@
-package com.xzh.bridge
+package com.xzh54.relayouter
 
 import org.junit.Test
 

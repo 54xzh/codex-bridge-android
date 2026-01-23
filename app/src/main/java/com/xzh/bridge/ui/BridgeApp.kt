@@ -1,6 +1,6 @@
 // 本文件提供 Android 端主入口 Composable，并组织三大模块页面：会话列表/聊天/连接设备。
 // 路由采用 Navigation-Compose，UI 基于 Material3。
-package com.xzh.bridge.ui
+package com.xzh54.relayouter.ui
 
 import android.net.Uri
 import androidx.compose.animation.ExperimentalAnimationApi
@@ -23,12 +23,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.xzh.bridge.bridge.BridgeApi
-import com.xzh.bridge.storage.BridgePreferences
-import com.xzh.bridge.storage.ConnectionConfig
-import com.xzh.bridge.ui.screens.chat.ChatScreen
-import com.xzh.bridge.ui.screens.connect.ConnectDeviceScreen
-import com.xzh.bridge.ui.screens.sessions.SessionListScreen
+import com.xzh54.relayouter.bridge.BridgeApi
+import com.xzh54.relayouter.storage.BridgePreferences
+import com.xzh54.relayouter.storage.ConnectionConfig
+import com.xzh54.relayouter.ui.screens.chat.ChatScreen
+import com.xzh54.relayouter.ui.screens.connect.ConnectDeviceScreen
+import com.xzh54.relayouter.ui.screens.sessions.SessionListScreen
 
 private object BridgeRoutes {
     const val Connect = "connect"

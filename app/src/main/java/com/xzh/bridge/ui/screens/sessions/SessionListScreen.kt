@@ -1,12 +1,11 @@
 // 本文件提供"会话列表（主界面）"：展示已同步的会话列表，并可进入聊天或跳转到连接设备。
 // 使用 M3 Expressive 组件和设计规范
-package com.xzh.bridge.ui.screens.sessions
+package com.xzh54.relayouter.ui.screens.sessions
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,7 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
@@ -55,14 +53,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.xzh.bridge.bridge.BridgeApi
-import com.xzh.bridge.bridge.SessionSummary
-import com.xzh.bridge.storage.ConnectionConfig
+import com.xzh54.relayouter.bridge.BridgeApi
+import com.xzh54.relayouter.bridge.SessionSummary
+import com.xzh54.relayouter.storage.ConnectionConfig
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -298,15 +295,16 @@ private fun ConnectionStatusCard(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun SessionCard(
     session: SessionSummary,
     onClick: () -> Unit
 ) {
     ElevatedCard(
+        onClick = onClick,
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick),
+            .fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow
         ),

@@ -1,4 +1,4 @@
-package com.xzh.bridge.ui.theme
+package com.xzh54.relayouter.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -103,6 +103,7 @@ fun BridgeTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
+        shapes = BridgeShapes,
         content = content
     )
 }

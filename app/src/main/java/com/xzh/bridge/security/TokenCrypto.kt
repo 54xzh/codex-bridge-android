@@ -1,6 +1,7 @@
 // 本文件提供 deviceToken 的本地加解密能力，用于避免明文落盘。
 // 采用 AndroidKeyStore 生成/持久化 AES-GCM 密钥。
-package com.xzh.bridge.security
+package com.xzh54.relayouter.security
+
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -65,4 +66,3 @@ object TokenCrypto {
         return generator.generateKey()
     }
 }
-

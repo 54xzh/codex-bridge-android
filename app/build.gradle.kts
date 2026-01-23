@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "com.xzh.bridge"
+    namespace = "com.xzh54.relayouter"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.xzh.bridge"
+        applicationId = "com.xzh54.relayouter"
         minSdk = 29
         targetSdk = 36
         versionCode = 1

@@ -1,9 +1,9 @@
 // 本文件封装 Android 端的连接配置持久化（baseUrl/deviceToken/deviceId）。
 // 当前使用 SharedPreferences + AndroidKeyStore(GCM) 对 deviceToken 做本地加密保存。
-package com.xzh.bridge.storage
+package com.xzh54.relayouter.storage
 
 import android.content.Context
-import com.xzh.bridge.security.TokenCrypto
+import com.xzh54.relayouter.security.TokenCrypto
 
 data class ConnectionConfig(
     val baseUrl: String,
@@ -35,4 +35,3 @@ class BridgePreferences(private val context: Context) {
         prefs.edit().clear().apply()
     }
 }
-
