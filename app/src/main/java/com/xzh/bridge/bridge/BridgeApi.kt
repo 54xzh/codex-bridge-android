@@ -223,7 +223,19 @@ data class SessionSummary(
 
 data class SessionMessage(
     val role: String = "",
-    val text: String = ""
+    val text: String = "",
+    val trace: List<SessionTraceEntry>? = null
+)
+
+data class SessionTraceEntry(
+    val kind: String = "",
+    val title: String? = null,
+    val text: String? = null,
+    val tool: String? = null,
+    val command: String? = null,
+    val status: String? = null,
+    val exitCode: Int? = null,
+    val output: String? = null
 )
 
 data class TurnPlanSnapshot(
