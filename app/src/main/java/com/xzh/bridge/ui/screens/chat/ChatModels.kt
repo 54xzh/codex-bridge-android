@@ -2,6 +2,8 @@ package com.xzh54.relayouter.ui.screens.chat
 
 import java.util.UUID
 
+internal const val PlaceholderAssistantText = "（未输出正文）"
+
 internal enum class TraceKind {
     Command,
     Reasoning,
@@ -61,6 +63,49 @@ internal fun splitReasoningTitle(raw: String?): Pair<String, String> {
     return title to detail
 }
 
+internal enum class PlanStatusKind {
+    Completed,
+    InProgress,
+    Pending,
+    Failed
+}
+
+internal fun classifyPlanStatus(status: String?): PlanStatusKind {
+    val normalized = status?.trim().orEmpty()
+    if (normalized.isBlank()) {
+        return PlanStatusKind.Pending
+    }
+
+    val token = normalized.replace("_", "").lowercase()
+    return when (token) {
+        "completed", "done" -> PlanStatusKind.Completed
+        "inprogress", "running" -> PlanStatusKind.InProgress
+        "failed", "error", "declined", "canceled", "cancelled", "interrupted" -> PlanStatusKind.Failed
+        "pending", "todo" -> PlanStatusKind.Pending
+        else -> PlanStatusKind.Pending
+    }
+}
+
+internal fun planStatusLabel(status: String?): String {
+    return when (classifyPlanStatus(status)) {
+        PlanStatusKind.Completed -> "已完成"
+        PlanStatusKind.InProgress -> "进行中"
+        PlanStatusKind.Pending -> "待处理"
+        PlanStatusKind.Failed -> "异常"
+    }
+}
+
+internal fun sanitizeMessageText(role: String, text: String): String {
+    val trimmed = text.trim()
+    if (role.equals("assistant", ignoreCase = true)
+        && (trimmed == PlaceholderAssistantText || trimmed == "无正文输出")
+    ) {
+        return ""
+    }
+
+    return text
+}
+
 internal fun commandStatusBadge(status: String?, exitCode: Int?): String? {
     val normalizedStatus = status?.trim().takeUnless { it.isNullOrBlank() } ?: "completed"
 
@@ -85,4 +130,3 @@ internal fun diffHeader(filePath: String?, added: Int, removed: Int): String {
     val name = filePath?.takeUnless { it.isBlank() } ?: "变更"
     return "$name (+$added -$removed)"
 }
-

@@ -6,6 +6,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
@@ -32,8 +34,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -45,8 +47,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,9 +62,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.xzh54.relayouter.bridge.BridgeApi
+import com.xzh54.relayouter.bridge.BridgeEnvelope
 import com.xzh54.relayouter.bridge.SessionSummary
 import com.xzh54.relayouter.storage.ConnectionConfig
 import kotlinx.coroutines.launch
+import okhttp3.WebSocket
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,6 +82,94 @@ fun SessionListScreen(
     var sessions by remember { mutableStateOf<List<SessionSummary>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var wsStatus by remember { mutableStateOf("未连接") }
+    var webSocket by remember { mutableStateOf<WebSocket?>(null) }
+
+    val sessionRuntimeStates = remember { mutableStateMapOf<String, SessionRuntimeState>() }
+    val runToSessionId = remember { mutableStateMapOf<String, String>() }
+
+    fun updateSession(sessionId: String, transform: (SessionRuntimeState) -> SessionRuntimeState) {
+        val current = sessionRuntimeStates[sessionId] ?: SessionRuntimeState()
+        sessionRuntimeStates[sessionId] = transform(current)
+    }
+
+    fun applyActiveRunSnapshot(activeRuns: List<Pair<String, String>>) {
+        val bySession = activeRuns.associate { it.first to it.second }
+        sessionRuntimeStates.keys.toList().forEach { sessionId ->
+            val existing = sessionRuntimeStates[sessionId] ?: return@forEach
+            val snapshotRunId = bySession[sessionId]
+            if (snapshotRunId == null && !existing.activeRunId.isNullOrBlank()) {
+                sessionRuntimeStates[sessionId] = existing.copy(activeRunId = null)
+            } else if (snapshotRunId != null && existing.activeRunId != snapshotRunId) {
+                sessionRuntimeStates[sessionId] = reduceRunStarted(existing, snapshotRunId)
+            }
+        }
+
+        bySession.forEach { (sessionId, runId) ->
+            runToSessionId[runId] = sessionId
+            updateSession(sessionId) { reduceRunStarted(it, runId) }
+        }
+    }
+
+    fun handleWsEvent(env: BridgeEnvelope) {
+        if (!env.type.equals("event", ignoreCase = true)) return
+        val data = env.data ?: return
+
+        when (env.name) {
+            "run.active.snapshot" -> {
+                val array = data.getAsJsonArray("activeRuns") ?: return
+                val pairs = mutableListOf<Pair<String, String>>()
+                for (elem in array) {
+                    if (!elem.isJsonObject) continue
+                    val obj = elem.asJsonObject
+                    val sessionId = obj.get("sessionId")?.asString ?: continue
+                    val runId = obj.get("runId")?.asString ?: continue
+                    if (sessionId.isBlank() || runId.isBlank()) continue
+                    pairs.add(sessionId to runId)
+                }
+                applyActiveRunSnapshot(pairs)
+            }
+            "run.started" -> {
+                val runId = data.get("runId")?.asString ?: return
+                val sessionId = data.get("sessionId")?.asString ?: return
+                if (runId.isBlank() || sessionId.isBlank()) return
+                runToSessionId[runId] = sessionId
+                updateSession(sessionId) { reduceRunStarted(it, runId) }
+            }
+            "run.completed" -> {
+                val runId = data.get("runId")?.asString ?: return
+                val sessionId = data.get("sessionId")?.asString ?: runToSessionId[runId] ?: return
+                updateSession(sessionId) { reduceRunCompleted(it, runId, succeeded = true) }
+            }
+            "run.failed" -> {
+                val runId = data.get("runId")?.asString ?: return
+                val sessionId = data.get("sessionId")?.asString ?: runToSessionId[runId] ?: return
+                updateSession(sessionId) { reduceRunCompleted(it, runId, succeeded = false) }
+            }
+            "run.canceled" -> {
+                val runId = data.get("runId")?.asString ?: return
+                val sessionId = data.get("sessionId")?.asString ?: runToSessionId[runId] ?: return
+                updateSession(sessionId) { reduceRunCanceled(it, runId) }
+            }
+            "run.rejected" -> {
+                val sessionId = data.get("sessionId")?.asString ?: return
+                updateSession(sessionId) { it.copy(activeRunId = null, hasWarningBadge = true) }
+            }
+        }
+    }
+
+    fun connectWs() {
+        webSocket?.close(1000, "reconnect")
+        wsStatus = "连接中…"
+        webSocket = api.connectWebSocket(
+            listener = { env -> handleWsEvent(env) },
+            onClosed = { reason ->
+                wsStatus = "已断开: $reason"
+                webSocket = null
+            }
+        )
+        wsStatus = "已连接"
+    }
 
     suspend fun refresh() {
         try {
@@ -92,6 +186,14 @@ fun SessionListScreen(
 
     LaunchedEffect(api.getBaseUrl()) {
         refresh()
+    }
+
+    DisposableEffect(api.getBaseUrl()) {
+        connectWs()
+        onDispose {
+            webSocket?.close(1000, "dispose")
+            webSocket = null
+        }
     }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -179,9 +281,14 @@ fun SessionListScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(sessions, key = { it.id }) { session ->
+                            val indicator = sessionRuntimeStates[session.id]?.indicator ?: SessionIndicatorKind.None
                             SessionCard(
                                 session = session,
-                                onClick = { onOpenSession(session.id) }
+                                indicator = indicator,
+                                onClick = {
+                                    updateSession(session.id) { clearSessionBadges(it) }
+                                    onOpenSession(session.id)
+                                }
                             )
                         }
                     }
@@ -298,6 +405,7 @@ private fun ConnectionStatusCard(
 @OptIn(ExperimentalMaterial3Api::class)
 private fun SessionCard(
     session: SessionSummary,
+    indicator: SessionIndicatorKind,
     onClick: () -> Unit
 ) {
     ElevatedCard(
@@ -347,7 +455,42 @@ private fun SessionCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+
+            SessionIndicator(indicator = indicator)
         }
+    }
+}
+
+@Composable
+private fun SessionIndicator(indicator: SessionIndicatorKind) {
+    if (indicator == SessionIndicatorKind.None) {
+        return
+    }
+
+    Spacer(modifier = Modifier.width(12.dp))
+
+    when (indicator) {
+        SessionIndicatorKind.Running -> {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp
+            )
+        }
+        SessionIndicatorKind.Completed -> {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(color = androidx.compose.ui.graphics.Color(0xFF32CD32), shape = CircleShape)
+            )
+        }
+        SessionIndicatorKind.Warning -> {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(color = MaterialTheme.colorScheme.tertiary, shape = CircleShape)
+            )
+        }
+        SessionIndicatorKind.None -> Unit
     }
 }
 

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,6 +22,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -105,12 +108,23 @@ fun ChatScreen(
         return current == explicitSessionId
     }
 
-    fun isRunForCurrentSession(runId: String): Boolean {
+    fun isRunForCurrentSession(runId: String, explicitSessionId: String?): Boolean {
         val current = sessionId
         if (current.isNullOrBlank()) return true
+
         val mapped = runToSessionId[runId]
-        if (mapped.isNullOrBlank()) return false
-        return current == mapped
+        val candidate = mapped ?: explicitSessionId
+        if (candidate.isNullOrBlank()) return false
+
+        if (mapped.isNullOrBlank() && !explicitSessionId.isNullOrBlank()) {
+            runToSessionId[runId] = explicitSessionId
+        }
+
+        return current == candidate
+    }
+
+    fun isRunForCurrentSession(runId: String): Boolean {
+        return isRunForCurrentSession(runId, explicitSessionId = null)
     }
 
     fun updateMessageById(messageId: String, transform: (ChatUiMessage) -> ChatUiMessage) {
@@ -151,27 +165,34 @@ fun ChatScreen(
                             sessionId = newId
                         }
                     },
+                    onActiveRunSnapshot = { activeRuns ->
+                        val current = sessionId ?: return@handleWsEvent
+                        val match = activeRuns.firstOrNull { it.sessionId == current } ?: return@handleWsEvent
+                        runToSessionId[match.runId] = current
+                        getOrCreateRunMessageId(match.runId)
+                    },
                     onChatMessage = { role, text, runId, explicitSessionId ->
+                        val sanitizedText = sanitizeMessageText(role, text)
                         val isUser = role.equals("user", ignoreCase = true)
                         if (isUser && !isEventForCurrentSession(explicitSessionId)) return@handleWsEvent
 
                         if (role.equals("assistant", ignoreCase = true)) {
                             val key = runId?.takeUnless { it.isBlank() } ?: return@handleWsEvent
-                            if (!isRunForCurrentSession(key)) return@handleWsEvent
+                            if (!isRunForCurrentSession(key, explicitSessionId)) return@handleWsEvent
 
                             val messageId = getOrCreateRunMessageId(key)
                             updateMessageById(messageId) { msg ->
                                 val hasDiff = msg.trace.any { it.kind == TraceKind.Diff }
-                                msg.copy(text = text, isTraceExpanded = hasDiff)
+                                msg.copy(text = sanitizedText, isTraceExpanded = hasDiff)
                             }
                             return@handleWsEvent
                         }
 
-                        messages.add(ChatUiMessage(role = role, text = text))
+                        messages.add(ChatUiMessage(role = role, text = sanitizedText))
                     },
-                    onChatDelta = { runId, delta ->
+                    onChatDelta = { runId, explicitSessionId, delta ->
                         val key = runId ?: return@handleWsEvent
-                        if (!isRunForCurrentSession(key)) return@handleWsEvent
+                        if (!isRunForCurrentSession(key, explicitSessionId)) return@handleWsEvent
                         val messageId = getOrCreateRunMessageId(key)
                         updateMessageById(messageId) { msg ->
                             val hasDiff = msg.trace.any { it.kind == TraceKind.Diff }
@@ -221,25 +242,25 @@ fun ChatScreen(
                             msg.copy(text = msg.text + extra, isTraceExpanded = false)
                         }
                     },
-                    onRunCommand = { runId, itemId, command, status, exitCode, output ->
-                        if (!isRunForCurrentSession(runId)) return@handleWsEvent
+                    onRunCommand = { runId, explicitSessionId, itemId, command, status, exitCode, output ->
+                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
                         val messageId = getOrCreateRunMessageId(runId)
                         updateMessageById(messageId) { msg ->
                             upsertCommandTrace(msg, itemId, null, command, status, exitCode, output)
                         }
                     },
-                    onRunCommandOutputDelta = { runId, itemId, delta ->
-                        if (!isRunForCurrentSession(runId)) return@handleWsEvent
+                    onRunCommandOutputDelta = { runId, explicitSessionId, itemId, delta ->
+                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
                         val messageId = getOrCreateRunMessageId(runId)
                         updateMessageById(messageId) { msg -> appendCommandOutputDelta(msg, itemId, delta) }
                     },
-                    onRunReasoning = { runId, itemId, text ->
-                        if (!isRunForCurrentSession(runId)) return@handleWsEvent
+                    onRunReasoning = { runId, explicitSessionId, itemId, text ->
+                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
                         val messageId = getOrCreateRunMessageId(runId)
                         updateMessageById(messageId) { msg -> upsertReasoningTrace(msg, itemId, text) }
                     },
-                    onRunReasoningDelta = { runId, itemId, textDelta ->
-                        if (!isRunForCurrentSession(runId)) return@handleWsEvent
+                    onRunReasoningDelta = { runId, explicitSessionId, itemId, textDelta ->
+                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
                         val messageId = getOrCreateRunMessageId(runId)
                         updateMessageById(messageId) { msg -> appendReasoningDelta(msg, itemId, textDelta) }
                     },
@@ -282,6 +303,22 @@ fun ChatScreen(
 
     LaunchedEffect(sessionId) {
         val current = sessionId ?: return@LaunchedEffect
+
+        // 新建会话时，sessionId 会在 run.started 之后由 session.created 异步补齐。
+        // 若此时已经有本地消息（用户输入/思考中/trace）在渲染，直接清空并重载历史会导致：
+        // - 执行中的消息被替换为 trace-only 占位（“未输出正文”），观感错误
+        // - runId 绑定丢失，导致正在运行的任务/状态展示不稳定
+        if (initialSessionId.isNullOrBlank() && messages.isNotEmpty()) {
+            try {
+                val snapshot = api.getPlan(current)
+                if (snapshot != null) {
+                    plan = snapshot.plan
+                }
+            } catch (_: Exception) {
+            }
+            return@LaunchedEffect
+        }
+
         try {
             isLoading = true
             suppressAutoScroll = true
@@ -538,16 +575,19 @@ private fun PlanCard(plan: List<TurnPlanStep>) {
                 color = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.height(8.dp))
-            plan.take(5).forEach { step ->
-                PlanStepItem(step = step)
-            }
-            if (plan.size > 5) {
-                Text(
-                    text = "还有 ${plan.size - 5} 个步骤...",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
+
+            val scroll = rememberScrollState()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+                    .verticalScroll(scroll)
+            ) {
+                Column {
+                    plan.forEach { step ->
+                        PlanStepItem(step = step)
+                    }
+                }
             }
         }
     }
@@ -561,10 +601,12 @@ private fun PlanStepItem(step: TurnPlanStep) {
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val (icon, tint) = when (step.status.lowercase()) {
-            "completed", "done" -> Icons.Default.CheckCircle to MaterialTheme.colorScheme.primary
-            "running", "in_progress" -> Icons.Default.PlayArrow to MaterialTheme.colorScheme.tertiary
-            else -> Icons.Default.HourglassEmpty to MaterialTheme.colorScheme.outline
+        val kind = classifyPlanStatus(step.status)
+        val (icon, tint) = when (kind) {
+            PlanStatusKind.Completed -> Icons.Default.CheckCircle to MaterialTheme.colorScheme.primary
+            PlanStatusKind.InProgress -> Icons.Default.PlayArrow to MaterialTheme.colorScheme.tertiary
+            PlanStatusKind.Failed -> Icons.Default.CloudOff to MaterialTheme.colorScheme.error
+            PlanStatusKind.Pending -> Icons.Default.HourglassEmpty to MaterialTheme.colorScheme.outline
         }
         Icon(
             imageVector = icon,
@@ -576,8 +618,15 @@ private fun PlanStepItem(step: TurnPlanStep) {
         Text(
             text = step.step,
             style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = planStatusLabel(step.status),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -690,29 +739,38 @@ private fun SessionMessage.toUiMessage(traceIndexStart: Int): Pair<ChatUiMessage
         }
     }
 
-    return ChatUiMessage(role = role, text = text, trace = entries) to traceIndex
+    val sanitized = sanitizeMessageText(role, text)
+    return ChatUiMessage(role = role, text = sanitized, trace = entries) to traceIndex
 }
 
 private fun handleWsEvent(
     env: BridgeEnvelope,
     onSessionCreated: (runId: String?, sessionId: String?) -> Unit,
+    onActiveRunSnapshot: (activeRuns: List<ActiveRunSnapshot>) -> Unit,
     onChatMessage: (role: String, text: String, runId: String?, sessionId: String?) -> Unit,
-    onChatDelta: (runId: String?, delta: String) -> Unit,
+    onChatDelta: (runId: String?, sessionId: String?, delta: String) -> Unit,
     onPlanUpdated: (sessionId: String?, steps: List<TurnPlanStep>) -> Unit,
     onRunStarted: (runId: String, sessionId: String?) -> Unit,
     onRunCompleted: (runId: String, sessionId: String?, exitCode: Int?) -> Unit,
     onRunCanceled: (runId: String, sessionId: String?) -> Unit,
     onRunFailed: (runId: String, sessionId: String?, message: String?) -> Unit,
-    onRunCommand: (runId: String, itemId: String, command: String, status: String?, exitCode: Int?, output: String?) -> Unit,
-    onRunCommandOutputDelta: (runId: String, itemId: String, delta: String) -> Unit,
-    onRunReasoning: (runId: String, itemId: String, text: String) -> Unit,
-    onRunReasoningDelta: (runId: String, itemId: String, textDelta: String) -> Unit,
+    onRunCommand: (runId: String, sessionId: String?, itemId: String, command: String, status: String?, exitCode: Int?, output: String?) -> Unit,
+    onRunCommandOutputDelta: (runId: String, sessionId: String?, itemId: String, delta: String) -> Unit,
+    onRunReasoning: (runId: String, sessionId: String?, itemId: String, text: String) -> Unit,
+    onRunReasoningDelta: (runId: String, sessionId: String?, itemId: String, textDelta: String) -> Unit,
     onDiffUpdated: (runId: String, threadId: String?, files: List<DiffFileUpdate>) -> Unit
 ) {
     if (env.type.lowercase() != "event") return
     val data = env.data ?: return
 
     when (env.name) {
+        "run.active.snapshot" -> {
+            val runsArray = data.getAsJsonArray("activeRuns") ?: return
+            val activeRuns = parseActiveRuns(runsArray)
+            if (activeRuns.isNotEmpty()) {
+                onActiveRunSnapshot(activeRuns)
+            }
+        }
         "session.created" -> {
             val createdSessionId = data.get("sessionId")?.asString
             val runId = data.get("runId")?.asString
@@ -750,34 +808,39 @@ private fun handleWsEvent(
         "chat.message.delta" -> {
             val delta = data.get("delta")?.asString ?: return
             val runId = data.get("runId")?.asString
-            onChatDelta(runId, delta)
+            val sessionId = data.get("sessionId")?.asString
+            onChatDelta(runId, sessionId, delta)
         }
         "run.command" -> {
             val runId = data.get("runId")?.asString ?: return
+            val sessionId = data.get("sessionId")?.asString
             val itemId = data.get("itemId")?.asString ?: return
             val command = data.get("command")?.asString ?: return
             val status = data.get("status")?.asString
             val exitCode = data.get("exitCode")?.asInt
             val output = data.get("output")?.asString
-            onRunCommand(runId, itemId, command, status, exitCode, output)
+            onRunCommand(runId, sessionId, itemId, command, status, exitCode, output)
         }
         "run.command.outputDelta" -> {
             val runId = data.get("runId")?.asString ?: return
+            val sessionId = data.get("sessionId")?.asString
             val itemId = data.get("itemId")?.asString ?: return
             val delta = data.get("delta")?.asString ?: return
-            onRunCommandOutputDelta(runId, itemId, delta)
+            onRunCommandOutputDelta(runId, sessionId, itemId, delta)
         }
         "run.reasoning" -> {
             val runId = data.get("runId")?.asString ?: return
+            val sessionId = data.get("sessionId")?.asString
             val itemId = data.get("itemId")?.asString ?: return
             val text = data.get("text")?.asString ?: return
-            onRunReasoning(runId, itemId, text)
+            onRunReasoning(runId, sessionId, itemId, text)
         }
         "run.reasoning.delta" -> {
             val runId = data.get("runId")?.asString ?: return
+            val sessionId = data.get("sessionId")?.asString
             val itemId = data.get("itemId")?.asString ?: return
             val textDelta = data.get("textDelta")?.asString ?: return
-            onRunReasoningDelta(runId, itemId, textDelta)
+            onRunReasoningDelta(runId, sessionId, itemId, textDelta)
         }
         "run.plan.updated" -> {
             val threadId = data.get("threadId")?.asString
@@ -795,6 +858,24 @@ private fun handleWsEvent(
             }
         }
     }
+}
+
+private data class ActiveRunSnapshot(
+    val sessionId: String,
+    val runId: String
+)
+
+private fun parseActiveRuns(activeRuns: com.google.gson.JsonArray): List<ActiveRunSnapshot> {
+    val results = mutableListOf<ActiveRunSnapshot>()
+    for (elem in activeRuns) {
+        if (!elem.isJsonObject) continue
+        val obj = elem.asJsonObject
+        val sessionId = obj.get("sessionId")?.asString ?: continue
+        val runId = obj.get("runId")?.asString ?: continue
+        if (sessionId.isBlank() || runId.isBlank()) continue
+        results.add(ActiveRunSnapshot(sessionId = sessionId, runId = runId))
+    }
+    return results
 }
 
 private fun parsePlanSteps(plan: com.google.gson.JsonArray): List<TurnPlanStep> {

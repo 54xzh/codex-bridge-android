@@ -9,6 +9,19 @@ import org.junit.Test
 
 class ChatTraceReducerTest {
     @Test
+    fun sanitizeMessageText_assistantPlaceholder_hidesText() {
+        assertEquals("", sanitizeMessageText("assistant", "（未输出正文）"))
+        assertEquals("", sanitizeMessageText("assistant", " （未输出正文） \n"))
+        assertEquals("", sanitizeMessageText("assistant", "无正文输出"))
+    }
+
+    @Test
+    fun sanitizeMessageText_nonPlaceholder_keepsText() {
+        assertEquals("hello", sanitizeMessageText("assistant", "hello"))
+        assertEquals("（未输出正文）", sanitizeMessageText("user", "（未输出正文）"))
+    }
+
+    @Test
     fun splitReasoningTitle_nullInput_returnsDefaultTitleAndEmptyText() {
         val (title, text) = splitReasoningTitle(null)
         assertEquals("思考摘要", title)
@@ -46,6 +59,21 @@ class ChatTraceReducerTest {
     }
 
     @Test
+    fun classifyPlanStatus_inProgressVariants_allRecognized() {
+        assertEquals(PlanStatusKind.InProgress, classifyPlanStatus("inProgress"))
+        assertEquals(PlanStatusKind.InProgress, classifyPlanStatus("in_progress"))
+        assertEquals(PlanStatusKind.InProgress, classifyPlanStatus("running"))
+    }
+
+    @Test
+    fun planStatusLabel_mapsToChineseLabel() {
+        assertEquals("进行中", planStatusLabel("inProgress"))
+        assertEquals("已完成", planStatusLabel("completed"))
+        assertEquals("待处理", planStatusLabel("pending"))
+        assertEquals("异常", planStatusLabel("failed"))
+    }
+
+    @Test
     fun upsertReasoningTrace_expandsLatestAndCollapsesPrevious() {
         val base = ChatUiMessage(role = "assistant", text = "x")
         val first = upsertReasoningTrace(base, itemId = "r1", text = "First reasoning")
@@ -72,4 +100,3 @@ class ChatTraceReducerTest {
         assertEquals("hello\n", cmd.output)
     }
 }
-
