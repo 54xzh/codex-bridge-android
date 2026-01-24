@@ -76,6 +76,7 @@ import com.xzh54.relayouter.bridge.SessionMessage
 import com.xzh54.relayouter.bridge.TurnPlanStep
 import kotlinx.coroutines.launch
 import okhttp3.WebSocket
+import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +101,7 @@ fun ChatScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var suppressAutoScroll by remember { mutableStateOf(false) }
+    val wsToken = remember { AtomicInteger(0) }
 
     fun isEventForCurrentSession(explicitSessionId: String?): Boolean {
         val current = sessionId
@@ -150,153 +152,162 @@ fun ChatScreen(
     }
 
     fun connectWs() {
-        webSocket?.close(1000, "reconnect")
+        val token = wsToken.incrementAndGet()
+        webSocket?.cancel()
         wsStatus = "连接中…"
-        webSocket = api.connectWebSocket(
+        val next = api.connectWebSocket(
             listener = { env ->
-                handleWsEvent(
-                    env = env,
-                    onSessionCreated = { runId, newId ->
-                        if (!runId.isNullOrBlank() && !newId.isNullOrBlank()) {
-                            runToSessionId[runId] = newId
-                        }
+                scope.launch {
+                    if (token != wsToken.get()) return@launch
+                    handleWsEvent(
+                        env = env,
+                        onSessionCreated = { runId, newId ->
+                            if (!runId.isNullOrBlank() && !newId.isNullOrBlank()) {
+                                runToSessionId[runId] = newId
+                            }
 
-                        if (!newId.isNullOrBlank() && sessionId.isNullOrBlank()) {
-                            sessionId = newId
-                        }
-                    },
-                    onActiveRunSnapshot = { activeRuns ->
-                        val current = sessionId ?: return@handleWsEvent
-                        val match = activeRuns.firstOrNull { it.sessionId == current } ?: return@handleWsEvent
-                        runToSessionId[match.runId] = current
-                        getOrCreateRunMessageId(match.runId)
-                    },
-                    onChatMessage = { role, text, runId, explicitSessionId ->
-                        val sanitizedText = sanitizeMessageText(role, text)
-                        val isUser = role.equals("user", ignoreCase = true)
-                        if (isUser && !isEventForCurrentSession(explicitSessionId)) return@handleWsEvent
+                            if (!newId.isNullOrBlank() && sessionId.isNullOrBlank()) {
+                                sessionId = newId
+                            }
+                        },
+                        onActiveRunSnapshot = { activeRuns ->
+                            val current = sessionId ?: return@handleWsEvent
+                            val match = activeRuns.firstOrNull { it.sessionId == current } ?: return@handleWsEvent
+                            runToSessionId[match.runId] = current
+                            getOrCreateRunMessageId(match.runId)
+                        },
+                        onChatMessage = { role, text, runId, explicitSessionId ->
+                            val sanitizedText = sanitizeMessageText(role, text)
+                            val isUser = role.equals("user", ignoreCase = true)
+                            if (isUser && !isEventForCurrentSession(explicitSessionId)) return@handleWsEvent
 
-                        if (role.equals("assistant", ignoreCase = true)) {
-                            val key = runId?.takeUnless { it.isBlank() } ?: return@handleWsEvent
+                            if (role.equals("assistant", ignoreCase = true)) {
+                                val key = runId?.takeUnless { it.isBlank() } ?: return@handleWsEvent
+                                if (!isRunForCurrentSession(key, explicitSessionId)) return@handleWsEvent
+
+                                val messageId = getOrCreateRunMessageId(key)
+                                updateMessageById(messageId) { msg ->
+                                    val hasDiff = msg.trace.any { it.kind == TraceKind.Diff }
+                                    msg.copy(text = sanitizedText, isTraceExpanded = hasDiff)
+                                }
+                                return@handleWsEvent
+                            }
+
+                            messages.add(ChatUiMessage(role = role, text = sanitizedText))
+                        },
+                        onChatDelta = { runId, explicitSessionId, delta ->
+                            val key = runId ?: return@handleWsEvent
                             if (!isRunForCurrentSession(key, explicitSessionId)) return@handleWsEvent
-
                             val messageId = getOrCreateRunMessageId(key)
                             updateMessageById(messageId) { msg ->
                                 val hasDiff = msg.trace.any { it.kind == TraceKind.Diff }
-                                msg.copy(text = sanitizedText, isTraceExpanded = hasDiff)
+                                val collapsed = if (msg.text == "思考中…" && !hasDiff) {
+                                    msg.copy(isTraceExpanded = false)
+                                } else {
+                                    msg
+                                }
+                                val nextText = if (collapsed.text == "思考中…") delta else collapsed.text + delta
+                                collapsed.copy(text = nextText)
                             }
-                            return@handleWsEvent
-                        }
+                        },
+                        onPlanUpdated = { updatedSessionId, steps ->
+                            if (sessionId.isNullOrBlank() || sessionId == updatedSessionId) {
+                                plan = steps
+                            }
+                        },
+                        onRunStarted = { runId, explicitSessionId ->
+                            if (!isEventForCurrentSession(explicitSessionId)) return@handleWsEvent
+                            runToSessionId[runId] = explicitSessionId
+                            getOrCreateRunMessageId(runId)
+                        },
+                        onRunCompleted = { runId, explicitSessionId, _ ->
+                            if (!explicitSessionId.isNullOrBlank()) {
+                                runToSessionId[runId] = explicitSessionId
+                            }
+                            if (!isRunForCurrentSession(runId)) return@handleWsEvent
+                            val messageId = runToMessageId[runId] ?: return@handleWsEvent
+                            updateMessageById(messageId) { msg -> msg.copy(isTraceExpanded = false) }
+                        },
+                        onRunCanceled = { runId, explicitSessionId ->
+                            if (!explicitSessionId.isNullOrBlank()) {
+                                runToSessionId[runId] = explicitSessionId
+                            }
+                            if (!isRunForCurrentSession(runId)) return@handleWsEvent
+                            val messageId = runToMessageId[runId] ?: return@handleWsEvent
+                            updateMessageById(messageId) { msg -> msg.copy(isTraceExpanded = false) }
+                        },
+                        onRunFailed = { runId, explicitSessionId, message ->
+                            if (!explicitSessionId.isNullOrBlank()) {
+                                runToSessionId[runId] = explicitSessionId
+                            }
+                            if (!isRunForCurrentSession(runId)) return@handleWsEvent
+                            val messageId = getOrCreateRunMessageId(runId)
+                            updateMessageById(messageId) { msg ->
+                                val extra = message?.takeUnless { it.isBlank() }?.let { "\n\n$it" }.orEmpty()
+                                msg.copy(text = msg.text + extra, isTraceExpanded = false)
+                            }
+                        },
+                        onRunCommand = { runId, explicitSessionId, itemId, command, status, exitCode, output ->
+                            if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
+                            val messageId = getOrCreateRunMessageId(runId)
+                            updateMessageById(messageId) { msg ->
+                                upsertCommandTrace(msg, itemId, null, command, status, exitCode, output)
+                            }
+                        },
+                        onRunCommandOutputDelta = { runId, explicitSessionId, itemId, delta ->
+                            if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
+                            val messageId = getOrCreateRunMessageId(runId)
+                            updateMessageById(messageId) { msg -> appendCommandOutputDelta(msg, itemId, delta) }
+                        },
+                        onRunReasoning = { runId, explicitSessionId, itemId, text ->
+                            if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
+                            val messageId = getOrCreateRunMessageId(runId)
+                            updateMessageById(messageId) { msg -> upsertReasoningTrace(msg, itemId, text) }
+                        },
+                        onRunReasoningDelta = { runId, explicitSessionId, itemId, textDelta ->
+                            if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
+                            val messageId = getOrCreateRunMessageId(runId)
+                            updateMessageById(messageId) { msg -> appendReasoningDelta(msg, itemId, textDelta) }
+                        },
+                        onDiffUpdated = { runId, threadId, files ->
+                            if (!threadId.isNullOrBlank()) {
+                                runToSessionId[runId] = threadId
+                                if (!isEventForCurrentSession(threadId)) return@handleWsEvent
+                            } else if (!isRunForCurrentSession(runId)) {
+                                return@handleWsEvent
+                            }
 
-                        messages.add(ChatUiMessage(role = role, text = sanitizedText))
-                    },
-                    onChatDelta = { runId, explicitSessionId, delta ->
-                        val key = runId ?: return@handleWsEvent
-                        if (!isRunForCurrentSession(key, explicitSessionId)) return@handleWsEvent
-                        val messageId = getOrCreateRunMessageId(key)
-                        updateMessageById(messageId) { msg ->
-                            val hasDiff = msg.trace.any { it.kind == TraceKind.Diff }
-                            val collapsed = if (msg.text == "思考中…" && !hasDiff) {
-                                msg.copy(isTraceExpanded = false)
-                            } else {
-                                msg
+                            val messageId = getOrCreateRunMessageId(runId)
+                            updateMessageById(messageId) { msg ->
+                                var next = msg
+                                var hasAnyDiff = false
+                                files.forEach { file ->
+                                    next = upsertDiffTrace(next, file.path, file.diff, file.added, file.removed)
+                                    hasAnyDiff = true
+                                }
+                                if (hasAnyDiff) next.copy(isTraceExpanded = true) else next
                             }
-                            val nextText = if (collapsed.text == "思考中…") delta else collapsed.text + delta
-                            collapsed.copy(text = nextText)
                         }
-                    },
-                    onPlanUpdated = { updatedSessionId, steps ->
-                        if (sessionId.isNullOrBlank() || sessionId == updatedSessionId) {
-                            plan = steps
-                        }
-                    },
-                    onRunStarted = { runId, explicitSessionId ->
-                        if (!isEventForCurrentSession(explicitSessionId)) return@handleWsEvent
-                        runToSessionId[runId] = explicitSessionId
-                        getOrCreateRunMessageId(runId)
-                    },
-                    onRunCompleted = { runId, explicitSessionId, _ ->
-                        if (!explicitSessionId.isNullOrBlank()) {
-                            runToSessionId[runId] = explicitSessionId
-                        }
-                        if (!isRunForCurrentSession(runId)) return@handleWsEvent
-                        val messageId = runToMessageId[runId] ?: return@handleWsEvent
-                        updateMessageById(messageId) { msg -> msg.copy(isTraceExpanded = false) }
-                    },
-                    onRunCanceled = { runId, explicitSessionId ->
-                        if (!explicitSessionId.isNullOrBlank()) {
-                            runToSessionId[runId] = explicitSessionId
-                        }
-                        if (!isRunForCurrentSession(runId)) return@handleWsEvent
-                        val messageId = runToMessageId[runId] ?: return@handleWsEvent
-                        updateMessageById(messageId) { msg -> msg.copy(isTraceExpanded = false) }
-                    },
-                    onRunFailed = { runId, explicitSessionId, message ->
-                        if (!explicitSessionId.isNullOrBlank()) {
-                            runToSessionId[runId] = explicitSessionId
-                        }
-                        if (!isRunForCurrentSession(runId)) return@handleWsEvent
-                        val messageId = getOrCreateRunMessageId(runId)
-                        updateMessageById(messageId) { msg ->
-                            val extra = message?.takeUnless { it.isBlank() }?.let { "\n\n$it" }.orEmpty()
-                            msg.copy(text = msg.text + extra, isTraceExpanded = false)
-                        }
-                    },
-                    onRunCommand = { runId, explicitSessionId, itemId, command, status, exitCode, output ->
-                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
-                        val messageId = getOrCreateRunMessageId(runId)
-                        updateMessageById(messageId) { msg ->
-                            upsertCommandTrace(msg, itemId, null, command, status, exitCode, output)
-                        }
-                    },
-                    onRunCommandOutputDelta = { runId, explicitSessionId, itemId, delta ->
-                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
-                        val messageId = getOrCreateRunMessageId(runId)
-                        updateMessageById(messageId) { msg -> appendCommandOutputDelta(msg, itemId, delta) }
-                    },
-                    onRunReasoning = { runId, explicitSessionId, itemId, text ->
-                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
-                        val messageId = getOrCreateRunMessageId(runId)
-                        updateMessageById(messageId) { msg -> upsertReasoningTrace(msg, itemId, text) }
-                    },
-                    onRunReasoningDelta = { runId, explicitSessionId, itemId, textDelta ->
-                        if (!isRunForCurrentSession(runId, explicitSessionId)) return@handleWsEvent
-                        val messageId = getOrCreateRunMessageId(runId)
-                        updateMessageById(messageId) { msg -> appendReasoningDelta(msg, itemId, textDelta) }
-                    },
-                    onDiffUpdated = { runId, threadId, files ->
-                        if (!threadId.isNullOrBlank()) {
-                            runToSessionId[runId] = threadId
-                            if (!isEventForCurrentSession(threadId)) return@handleWsEvent
-                        } else if (!isRunForCurrentSession(runId)) {
-                            return@handleWsEvent
-                        }
-
-                        val messageId = getOrCreateRunMessageId(runId)
-                        updateMessageById(messageId) { msg ->
-                            var next = msg
-                            var hasAnyDiff = false
-                            files.forEach { file ->
-                                next = upsertDiffTrace(next, file.path, file.diff, file.added, file.removed)
-                                hasAnyDiff = true
-                            }
-                            if (hasAnyDiff) next.copy(isTraceExpanded = true) else next
-                        }
-                    }
-                )
+                    )
+                }
             },
             onClosed = { reason ->
-                wsStatus = "已断开: $reason"
-                webSocket = null
+                scope.launch {
+                    if (token != wsToken.get()) return@launch
+                    wsStatus = "已断开: $reason"
+                    webSocket = null
+                }
             }
         )
+        webSocket = next
         wsStatus = "已连接"
     }
 
     DisposableEffect(api.getBaseUrl()) {
         connectWs()
         onDispose {
-            webSocket?.close(1000, "dispose")
+            wsToken.incrementAndGet()
+            webSocket?.cancel()
             webSocket = null
         }
     }

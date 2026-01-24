@@ -67,6 +67,7 @@ import com.xzh54.relayouter.bridge.SessionSummary
 import com.xzh54.relayouter.storage.ConnectionConfig
 import kotlinx.coroutines.launch
 import okhttp3.WebSocket
+import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,6 +85,7 @@ fun SessionListScreen(
     var isLoading by remember { mutableStateOf(true) }
     var wsStatus by remember { mutableStateOf("未连接") }
     var webSocket by remember { mutableStateOf<WebSocket?>(null) }
+    val wsToken = remember { AtomicInteger(0) }
 
     val sessionRuntimeStates = remember { mutableStateMapOf<String, SessionRuntimeState>() }
     val runToSessionId = remember { mutableStateMapOf<String, String>() }
@@ -159,15 +161,25 @@ fun SessionListScreen(
     }
 
     fun connectWs() {
-        webSocket?.close(1000, "reconnect")
+        val token = wsToken.incrementAndGet()
+        webSocket?.cancel()
         wsStatus = "连接中…"
-        webSocket = api.connectWebSocket(
-            listener = { env -> handleWsEvent(env) },
+        val next = api.connectWebSocket(
+            listener = { env ->
+                scope.launch {
+                    if (token != wsToken.get()) return@launch
+                    handleWsEvent(env)
+                }
+            },
             onClosed = { reason ->
-                wsStatus = "已断开: $reason"
-                webSocket = null
+                scope.launch {
+                    if (token != wsToken.get()) return@launch
+                    wsStatus = "已断开: $reason"
+                    webSocket = null
+                }
             }
         )
+        webSocket = next
         wsStatus = "已连接"
     }
 
@@ -191,7 +203,8 @@ fun SessionListScreen(
     DisposableEffect(api.getBaseUrl()) {
         connectWs()
         onDispose {
-            webSocket?.close(1000, "dispose")
+            wsToken.incrementAndGet()
+            webSocket?.cancel()
             webSocket = null
         }
     }
